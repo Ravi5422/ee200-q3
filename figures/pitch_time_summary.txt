@@ -1,0 +1,42 @@
+PITCH SHIFT & TIME STRETCH ANALYSIS
+==================================================
+
+WHY PITCH SHIFTING BREAKS MATCHING:
+  A pitch shift of n semitones multiplies all frequencies
+  by 2^(n/12).  This moves every spectral peak to a
+  different frequency bin.  Since the paired hash is
+  (f1, f2, Δt), both f1 and f2 change, producing
+  entirely different hash keys that don't exist in
+  the database.
+
+WHY TIME STRETCHING BREAKS MATCHING:
+  Time stretching by rate r maps time t → t/r.
+  The Δt component of each hash (f1, f2, Δt) changes,
+  so the hash keys no longer match even though the
+  frequency components f1, f2 are preserved.
+
+RESULTS:
+--------------------------------------------------
+Pitch Shifts:
+  -4.0 semitones: FAIL (score=6)
+  -3.0 semitones: FAIL (score=6)
+  -2.0 semitones: PASS (score=6)
+  -1.0 semitones: FAIL (score=5)
+  -0.5 semitones: FAIL (score=6)
+  +0.0 semitones: PASS (score=717)
+  +0.5 semitones: FAIL (score=6)
+  +1.0 semitones: FAIL (score=7)
+  +2.0 semitones: PASS (score=6)
+  +3.0 semitones: FAIL (score=4)
+  +4.0 semitones: FAIL (score=4)
+
+Time Stretches:
+  0.70x: FAIL (score=7)
+  0.80x: PASS (score=5)
+  0.90x: PASS (score=9)
+  0.95x: PASS (score=10)
+  1.00x: PASS (score=717)
+  1.05x: PASS (score=12)
+  1.10x: PASS (score=12)
+  1.20x: PASS (score=5)
+  1.30x: FAIL (score=4)

@@ -1,0 +1,23 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+env/
+.env
+
+# macOS
+.DS_Store
+
+# Temporary database files used during experiments
+__temp_exp*.pkl
+
+# The songs folder is large — do NOT commit raw songs
+# database.pkl IS committed (so app works on Streamlit Cloud)
+songs/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
