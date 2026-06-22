@@ -1,80 +1,189 @@
 # EE200 — Q3 Report: Sonic Signatures & Zapptain America
+## Audio Fingerprinting System
 
 **Live App:** https://ee200-q3-u6rgv2jyrhfqdr4h4lfvje.streamlit.app  
 **Source Code:** https://github.com/Ravi5422/ee200-q3
 
 ---
 
-## 1. Introduction
+## 1. Introduction & Problem Statement
 
-For this project, we set out to build our own version of Shazam from scratch. The challenge was pretty straightforward but technically deep: if we take a short 5 to 10-second audio clip recorded in a noisy room, how can we reliably figure out which song it belongs to out of a database of 50 tracks?
+The goal of this project is to build a robust, **Shazam-style audio fingerprinting system** capable of identifying a specific song from a very short (5–10 second), potentially noisy query clip. 
 
-Instead of relying on pre-built machine learning models or audio fingerprinting libraries, we built the entire system using fundamental Digital Signal Processing (DSP) techniques. We had to find a way to extract a unique "fingerprint" from the audio that wouldn't get destroyed by background noise or volume changes.
+Crucially, this system is constructed entirely from scratch using foundational Digital Signal Processing (DSP) principles. No pre-built fingerprinting or machine learning libraries were used. The core challenge lies in extracting a unique "signature" from an audio file that remains stable despite background noise, recording artifacts, or varying starting positions within the song.
 
-## 2. How Our Pipeline Works
+---
 
-To make this happen, we process the raw audio through a four-stage pipeline. This compresses megabytes of raw audio into just a few kilobytes of highly searchable data.
+## 2. Methodology — The Pipeline
 
-### Step 1: The Spectrogram
-First, we convert the audio waveform into a time-frequency representation using the Short-Time Fourier Transform (STFT). We used a 1024-sample Hann window with a 50% overlap. We specifically convert the magnitudes to a logarithmic scale (dB). This is super important because human hearing is logarithmic—taking the log allows us to mathematically "see" the quieter, structural harmonics of the song that would otherwise be drowned out by loud bass frequencies.
+The system processes raw audio through a rigorous four-stage pipeline designed to compress megabytes of audio into a few kilobytes of highly searchable, robust data:
 
-### Step 2: Constellation Extraction
-A spectrogram still has too much data. To make it searchable, we isolate only the most prominent peaks. We slide a 20x20 neighborhood window across the spectrogram and keep a point only if it's the absolute maximum in that window and it exceeds the overall average volume. This leaves us with a "constellation map"—a sparse scatter plot of dots. These dots usually represent strong instrument notes or drum hits, which are exactly the parts of a song most likely to survive heavy background noise.
+```
+Audio File
+    ↓
+[1] Spectrogram (STFT)        — Convert to a time-frequency representation
+    ↓
+[2] Constellation Extraction  — Filter to local maxima (landmark peaks)
+    ↓
+[3] Paired Hashing            — Encode pairs of peaks as (f1, f2, Δt)
+    ↓
+[4] Histogram Matching        — Vote on time offsets to decisively find the best match
+```
 
-### Step 3: Combinatorial Hashing
-A single peak isn't unique. To identify a song, we look at the relationship between peaks. For every "anchor" peak, we pair it with a few "target" peaks that happen shortly after it. We hash these pairs into a format containing the two frequencies and the time difference between them. Because we use the time difference ($\Delta t$) instead of absolute timestamps, the hash doesn't care when the recording started. And because we use frequency bins rather than amplitude, it completely ignores volume changes.
+### 2.1 Spectrogram Generation
+The raw audio waveform is first converted into the frequency domain over time using the Short-Time Fourier Transform (STFT) via `scipy.signal.spectrogram`. We used the following parameters:
+- **Window**: Hann window, `nperseg = 1024` samples (provides an optimal balance of frequency and time resolution).
+- **Overlap**: 50% (`noverlap = 512`), which ensures no signal data is lost at the boundaries of the windows.
+- **Output**: Log-magnitude spectrogram in dB: `10 × log10(|STFT|² + ε)`.
 
-### Step 4: Histogram Voting
-When we test a query clip, we generate its hashes and look them up in our database. For every match, we calculate the time offset: $\delta = t_{\text{database}} - t_{\text{query}}$. If a song is a true match, a ton of hashes will all point to the exact same starting time offset, creating a massive spike in a histogram. Random coincidences just create flat, scattered noise. The song with the tallest spike is our winner.
+Using a log scale compresses the massive dynamic range of audio, simulating human auditory perception and allowing faint but structurally important harmonic peaks to become mathematically visible alongside overwhelming bass frequencies.
 
-## 3. Database Stats
+### 2.2 Constellation Extraction
+To make the data searchable, we must drastically reduce the spectrogram to just its most prominent features. We detect local maxima using `scipy.ndimage.maximum_filter` with a 20×20 bin neighbourhood. A point is kept only if:
+1. It is the absolute local maximum within its immediate 20×20 neighbourhood.
+2. Its amplitude strictly exceeds an adaptive threshold (`mean + 2 × std` of the entire spectrogram).
 
-- **Total songs indexed:** 50
-- **Total unique paired hashes:** 1,495,644
-- **Database file size:** 36.25 MB
-- **Indexing time:** ~30 seconds
+This yields a sparse set of the most prominent time–frequency points — the "constellation map". These peaks typically correspond to strong harmonics and percussive onsets, which are the most likely elements to survive background noise.
 
-## 4. Experiments and Observations
+### 2.3 Paired Hashing (Combinatorial Fingerprinting)
+A single peak (frequency and time) is not unique enough to identify a song. Therefore, for each "anchor" peak, we pair it with up to 15 "target" future peaks within a specific target zone (e.g., within 200 time bins). Each pair generates a hash:
 
-### Why a Standard DFT Isn't Enough
-We experimented with taking a standard 1D Fourier Transform of the song, but it completely strips away time. It tells you what frequencies exist, but not *when* they happen. Two completely different songs in the same key can have very similar DFTs. A spectrogram is absolutely necessary because the temporal evolution is what actually makes a song unique.
+$$\text{hash} = (f_{\text{anchor}},\ f_{\text{target}},\ \Delta t) \quad \longrightarrow \quad t_{\text{anchor}}$$
+
+This combinatorial hash encodes the **relative** spectral structure. Because it relies on $\Delta t$ (the time difference between peaks) rather than absolute time, the hash is perfectly invariant to when the recording started. Furthermore, because it records frequency bins rather than amplitude, it is completely invariant to volume changes.
+
+### 2.4 Histogram Matching
+When a query clip is recorded, we extract its constellation and compute its hashes just like the database songs. We look up each query hash in our database. For every match found, we compute the implied time offset:
+
+$$\delta = t_{\text{db}} - t_{\text{query}}$$
+
+A **true match** will have many hashes that all agree on the exact same relative starting time ($\delta$), producing a massive, sharp spike in a histogram. False matches (coincidences) will produce scattered, random $\delta$ values across the timeline, forming a flat "noise floor." The song with the tallest coherent spike is declared the winner.
+
+---
+
+## 3. Database Statistics
+
+| Metric | Value |
+|---|---|
+| Songs indexed | 50 (The Beatles + Queen) |
+| Total unique paired hashes | 1,495,644 |
+| Total hash entries | 2,812,707 |
+| Database file size | 36.25 MB |
+| Indexing time | 30.57 seconds |
+
+---
+
+## 4. Experiments & Results
+
+### Experiment 1: DFT vs Spectrogram
+
+**Objective:** Understand why a standard 1D Discrete Fourier Transform (DFT) is insufficient.
 
 ![DFT vs Spectrogram](figures/dft_vs_spectrogram.png)
 
-### The Time-Frequency Trade-off
-We hit a classic DSP hurdle: the Heisenberg uncertainty principle. If we used a really short STFT window (e.g., 256 samples), we got great time precision for drum beats but terrible pitch resolution. If we used a massive window (4096 samples), the pitch was perfect but fast notes blurred together. We found that 1024 samples gave us the perfect middle ground to find clean constellation peaks.
+**Observation:** The 1D DFT (top panel) reveals the overall frequencies present in the audio, but strips away all temporal information (when those frequencies occurred). The spectrogram (bottom panel) preserves both axes, showing the structural evolution of the track.
+**Conclusion:** A spectrogram is strictly required. Two completely different songs might share the same overall frequency distribution (e.g., same instruments and key), but their temporal evolution will be entirely unique.
+
+---
+
+### Experiment 2: Window Size Trade-off
+
+**Objective:** Demonstrate the Heisenberg uncertainty principle applied to signal processing.
 
 ![Window Trade-off](figures/window_tradeoff.png)
 
-### Constellation Map
+**Observation:**
+- **Short window (nperseg=256):** Excellent time resolution (sharp drum hits), but terrible frequency resolution (notes blur together).
+- **Long window (nperseg=4096):** Excellent frequency resolution (precise pitch), but terrible time resolution (transients smear across time).
+
+**Conclusion:** `nperseg=1024` provides the optimal middle ground for extracting well-defined, singular peaks necessary for our constellation map.
+
+---
+
+### Experiment 3: Constellation Map
+
+**Objective:** Visualise the sparse peak representation.
+
 ![Constellation](figures/constellation.png)
 
-### Paired Hashing Superiority
-Single-peak hashing creates massive ambiguity, but paired hashing forces a single, undeniable spike. 
+**Observation:** The extracted constellation (cyan dots) is incredibly sparse compared to the dense spectrogram. It effectively strips away amplitude data, leaving only the structural "skeleton" of the track.
+**Conclusion:** This sparsity is the secret to the algorithm's efficiency, reducing the search space by over 99% while retaining the most robust, identifiable features.
+
+---
+
+### Experiment 4: Single vs Paired Hash Histograms
+
+**Objective:** Prove the necessity of combinatorial paired hashing.
 
 ![Single vs Paired](figures/single_vs_paired_histogram.png)
 
-### Noise Robustness
-We tested the system by injecting massive amounts of white noise into the query clips. Impressively, it maintained a **100% accuracy rate** even at 0 dB SNR (meaning the noise was exactly as loud as the music itself). The system only started dropping matches at -3 dB. This works so well because random noise generates random hashes that fail to form a coherent histogram spike.
+**Observation:**
+- **Single-peak hashes (left):** The histogram is scattered. Because simple frequencies occur repeatedly in music, a single frequency bin is highly ambiguous.
+- **Paired hashes (right):** A massive, undeniable spike emerges. The combination of two specific frequencies occurring exactly $\Delta t$ apart is statistically rare, driving coincidental noise to near zero.
+
+**Conclusion:** Paired hashing is what elevates the system from a theoretical concept to a production-ready, highly accurate tool.
+
+---
+
+### Experiment 5: Noise Robustness — Accuracy vs SNR
+
+**Objective:** Determine the breaking point of the algorithm under noise.
 
 ![Accuracy vs SNR](figures/accuracy_vs_snr.png)
 
-### Pitch Shifting vs. Time Stretching
-We also tested how the algorithm handles distorted audio. Pitch shifting completely breaks the system. If you shift the pitch, all the frequencies multiply, meaning every single peak falls into a new bin and the hashes no longer match the database. Time stretching, on the other hand, is a bit more forgiving. Since the frequencies don't change, only the $\Delta t$ expands. Small stretches ($\pm$10%) are tolerated because the $\Delta t$ still falls into the same discrete integer bins, but heavy stretching causes it to fail.
+| SNR (dB) | Correct | Accuracy |
+|---|---|---|
+| +40 to 0 dB | 50/50 | **100%** |
+| -3 dB | 49/50 | **98%** |
+| -5 dB | 49/50 | **98%** |
+
+**Observation:** The system operates flawlessly (100% accuracy) even at 0 dB SNR, where the background noise is exactly as loud as the music itself. It only begins to fail at -3 dB, where noise overpower the signal entirely.
+**Conclusion:** The histogram voting architecture is exceptionally noise-robust because random noise peaks generate random, non-coherent hashes that fail to form a spike, while the few surviving true signal peaks reliably accumulate at the correct offset.
+
+---
+
+### Experiment 6: Pitch Shift & Time Stretch
+
+**Objective:** Evaluate robustness against temporal and pitch distortions.
 
 ![Pitch Time Analysis](figures/pitch_time_analysis.png)
 
-## 5. Zapptain America (Our Web App)
+**Pitch shift results:**
+| Shift | Result | Reason |
+|---|---|---|
+| 0.0 semitones | ✅ PASS | Exact match |
+| ±0.5 semitones | ❌ FAIL | Frequencies fall into adjacent bins |
 
-We didn't just write scripts; we packaged the entire system into a modern, highly responsive web application using Streamlit. 
+**Time stretch results:**
+| Rate | Result |
+|---|---|
+| 1.00× | ✅ PASS |
+| 0.90×–1.10× | ✅ PASS |
+| 0.70× or 1.30× | ❌ FAIL |
 
-We gave the interface a sleek dark-mode aesthetic with custom CSS. One of the coolest features is the Library tab: it dynamically displays all 50 songs, and we generated custom, brightly colored constellation maps to act as the background image for each song card, creating a beautiful mosaic effect.
-
-To make sure it could be reliably deployed to the cloud, we pre-compiled the constellation data into a tiny file. This means the live website doesn't need to process hundreds of megabytes of raw MP3s to draw the visual plots—it just loads the math instantly.
-
-## 6. Conclusion
-
-Building this from scratch was incredibly rewarding. By extracting sparse constellation peaks, encoding their relative relationships, and using a histogram voting system, we managed to achieve Shazam-level accuracy using nothing but basic math arrays and signal processing logic. The final system is lightning-fast, highly resistant to noise, and beautifully packaged for the web.
+**Conclusion:** Pitch shifting breaks the system because it displaces both $f_{\text{anchor}}$ and $f_{\text{target}}$, completely invalidating the hash keys. Time stretching is slightly more forgiving because frequencies remain intact while only $\Delta t$ expands/contracts, allowing small stretches (±10%) to still map to the same discrete integer bins.
 
 ---
+
+## 5. Application — Zapptain America (Streamlit UI)
+
+### Modern Web Architecture
+The system is wrapped in a highly responsive, modern web application using Streamlit. To ensure a premium user experience, we implemented:
+- **Dark-Theme Aesthetics**: A custom CSS overhaul featuring modern typography, glassmorphic styling, and interactive hover states.
+- **Mosaic Library Tab**: The library displays 50 dynamic song cards. Each card features its own pre-computed, uniquely colored constellation map acting as the background image, providing a stunning visual mosaic of the database.
+- **Real-Time Visualizations**: During a query, the system dynamically plots the candidate scores using a sleek horizontal bar chart, and renders a fully interactive full-song constellation highlighting the exact offset window where the query was found.
+
+### Robust Cloud Deployment
+The app is deployed continuously via **Streamlit Community Cloud** (Link: https://ee200-q3-u6rgv2jyrhfqdr4h4lfvje.streamlit.app). To solve common cloud limitations:
+1. **FFmpeg Integration**: A custom `packages.txt` ensures system-level audio decoders are present so users can upload raw MP3s directly to the cloud without crashing.
+2. **Offline Constellations**: Instead of pushing hundreds of megabytes of raw MP3s to GitHub for the Step 2 visualization, we pre-extracted the peak coordinates into a lightweight `< 1MB` `constellations.pkl` file. This allows the cloud server to rapidly render full-song background plots using only the cached mathematical data.
+
+---
+
+## 6. Conclusions
+
+We successfully implemented a complete, highly accurate audio fingerprinting system from first principles. By leveraging the spectrogram for time-frequency analysis, extracting sparse constellation peaks, encoding relative relationships through paired hashing, and utilizing coherent histogram voting, the system matches industry-standard robustness (100% accuracy at 0 dB SNR). The entire architecture is packaged in a production-ready, beautifully designed web application deployed seamlessly to the cloud.
+
+---
+
 *EE200 Course Project — Q3: Sonic Signatures & Zapptain America*
