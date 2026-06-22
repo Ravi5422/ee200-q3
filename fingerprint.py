@@ -31,20 +31,23 @@ SUPPORTED_EXTENSIONS = {'.wav', '.mp3', '.flac', '.ogg', '.m4a'}
 # 1. AUDIO LOADING
 # ============================================================================
 
-def load_audio(filepath, sr=None):
+def load_audio(filepath, sr=22050):
     """
     Load an audio file (WAV, MP3, FLAC, etc.) and return (audio_mono, sample_rate).
 
     - Uses librosa.load() which handles MP3, WAV, and many other formats.
     - Automatically converts stereo → mono.
     - Returns float32 normalised to [-1, 1].
+    - IMPORTANT: Enforces a standard sample rate (22050 Hz) so that frequency bins 
+      match exactly between the database and the query, even if the query clip 
+      is downsampled or recorded differently.
 
     Parameters
     ----------
     filepath : str
         Path to an audio file (.wav, .mp3, .flac, etc.).
-    sr : int or None
-        Target sample rate.  None = use the file's native rate.
+    sr : int
+        Target sample rate. Default is 22050 Hz for robust matching.
 
     Returns
     -------
@@ -54,7 +57,7 @@ def load_audio(filepath, sr=None):
         Sample rate in Hz.
     """
     # librosa.load returns (audio_float32, sample_rate)
-    # mono=True averages channels, sr=None keeps native rate
+    # mono=True averages channels, sr enforces consistent frequency bins
     audio, sr = librosa.load(filepath, sr=sr, mono=True)
     audio = audio.astype(np.float64)
     return audio, sr
