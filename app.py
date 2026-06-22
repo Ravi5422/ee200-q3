@@ -320,6 +320,17 @@ def load_thumbnails():
 
 thumbnails = load_thumbnails()
 
+@st.cache_data
+def load_constellations():
+    const_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "constellations.pkl")
+    if os.path.exists(const_path):
+        import pickle
+        with open(const_path, "rb") as f:
+            return pickle.load(f)
+    return {}
+
+constellations_db = load_constellations()
+
 
 # ============================================================================
 # VISUALIZATION FUNCTIONS (DARK THEME)
@@ -362,11 +373,8 @@ def plot_constellation_dark(Sxx, f, t, peaks):
     plt.tight_layout()
     return fig
 
-def plot_full_song_constellation(audio_path, query_offset_frames, query_duration_frames, song_name):
-    """Plot full song constellation and highlight the match window."""
-    audio, sr = fp.load_audio(audio_path)
-    f, t, Sxx = fp.compute_spectrogram(audio, sr)
-    peaks = fp.find_peaks(Sxx)
+def plot_full_song_constellation(peaks, query_offset_frames, query_duration_frames, song_name):
+    """Plot full song constellation and highlight the match window using precomputed peaks."""
     
     fig, ax = plt.subplots(figsize=(12, 3.5))
     fig.patch.set_facecolor('#ffffff')
@@ -617,20 +625,14 @@ with tab_id:
             best_offset_frames = max(best['histogram'], key=best['histogram'].get)
             query_duration_frames = len(t)
             
-            # Find the actual audio file for the best match to plot its full constellation
-            songs_dir = "/Users/ravijani/Downloads/ee200_q3/songs"
-            matched_file = None
-            if os.path.exists(songs_dir):
-                for f_name in os.listdir(songs_dir):
-                    if os.path.splitext(f_name)[0] == best["song_name"]:
-                        matched_file = os.path.join(songs_dir, f_name)
-                        break
+            # Get precomputed peaks to plot the full song constellation
+            song_peaks = constellations_db.get(best["song_name"])
             
-            if matched_file:
+            if song_peaks:
                 with st.spinner("Generating full song constellation..."):
-                    st.pyplot(plot_full_song_constellation(matched_file, best_offset_frames, query_duration_frames, best["song_name"]))
+                    st.pyplot(plot_full_song_constellation(song_peaks, best_offset_frames, query_duration_frames, best["song_name"]))
             else:
-                st.info("Full song audio file not found to generate background plot.")
+                st.info("Full song constellation data not found to generate background plot.")
                 
             # --- STEP 3 ---
             st.markdown('<div class="step-label">STEP 3 • THE PROOF</div>', unsafe_allow_html=True)
