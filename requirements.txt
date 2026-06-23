@@ -3,4 +3,4 @@ scipy
 matplotlib
 streamlit
 librosa
-soundfile
+soundfile>=0.12.1
